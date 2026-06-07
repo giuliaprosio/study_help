@@ -1,14 +1,14 @@
 # Study Helper
 
-A Streamlit application to help medical students organize exam topics, review them randomly with weighted difficulty, track progress by subject, and persist all data using SQLite.
+A Streamlit application to help medical students organize exam topics, review them randomly with weighted difficulty, track overall progress, and persist all data using SQLite.
 
 ## Features
 
-- Add subjects and topics from the UI
+- Add topics from the UI
 - Edit and delete existing topics
 - Generate a random revision topic with weighted selection based on confidence
 - Mark topics as reviewed with Easy / Medium / Hard outcomes
-- Track progress with Plotly doughnut charts and completion tables
+- Track progress with Plotly completion charts and progress metrics
 - Import existing JSON backup files
 - Export a JSON backup directly from the browser
 - Persist all data in a local SQLite database (`study.db`)

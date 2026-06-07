@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
+import random
 import sqlite3
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +23,61 @@ from database import (
 )
 
 
+def render_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        /* Dark / black theme */
+        body, .stApp {
+            background: #0b1220;
+            color: #e6eef8;
+        }
+
+        .css-18e3th9,
+        .css-1d391kg,
+        .css-1v0mbdj,
+        .css-1lcbmhc {
+            background: #071021;
+            color: #e6eef8;
+        }
+
+        .stSidebar {
+            background-color: #071021;
+            color: #e6eef8;
+        }
+
+        .stButton button,
+        .stDownloadButton button {
+            background-color: #7c3aed !important;
+            color: white !important;
+            border-radius: 8px !important;
+            border: none !important;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            color: #e6eef8;
+        }
+
+        .stMetricValue {
+            color: #f8fafc !important;
+        }
+
+        .stAlert {
+            border-radius: 10px;
+            background: rgba(255,255,255,0.04);
+            color: #e6eef8;
+        }
+
+        .css-1v0mbdj .st-c4 {
+            color: #e6eef8;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def sanitize_text(value: str) -> str:
-    """Trim whitespace and normalize a text field."""
     return value.strip()
 
 
@@ -34,49 +86,95 @@ def ensure_session_state() -> None:
         st.session_state.editing_topic_id = None
     if "random_topic_id" not in st.session_state:
         st.session_state.random_topic_id = None
+    if "sidebar_topic" not in st.session_state:
+        st.session_state.sidebar_topic = ""
+    if "sidebar_message" not in st.session_state:
+        st.session_state.sidebar_message = ""
+    if "sidebar_error" not in st.session_state:
+        st.session_state.sidebar_error = ""
+    if "current_page" not in st.session_state:
+        st.session_state.current_page = "Home"
+
+
+def handle_add_topic() -> None:
+    topic_name = sanitize_text(st.session_state.sidebar_topic)
+    if not topic_name:
+        st.session_state.sidebar_error = "Topic cannot be empty."
+        st.session_state.sidebar_message = ""
+        return
+
+    try:
+        create_topic("General", topic_name)
+        st.session_state.sidebar_topic = ""
+        st.session_state.sidebar_message = "Topic added successfully."
+        st.session_state.sidebar_error = ""
+    except sqlite3.IntegrityError:
+        st.session_state.sidebar_error = "That topic already exists."
+        st.session_state.sidebar_message = ""
+
+
+def handle_import_json() -> None:
+    uploaded_file = st.session_state.upload_json_file
+    if uploaded_file is None:
+        st.session_state.sidebar_error = "Choose a JSON file first."
+        st.session_state.sidebar_message = ""
+        return
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_file:
+        temp_file.write(uploaded_file.getvalue())
+        temp_path = Path(temp_file.name)
+
+    try:
+        inserted, skipped = import_json(str(temp_path))
+        st.session_state.sidebar_message = f"Imported {inserted} topics. Skipped {skipped} duplicates."
+        st.session_state.sidebar_error = ""
+    except ValueError as exc:
+        st.session_state.sidebar_error = f"Invalid JSON format: {exc}"
+        st.session_state.sidebar_message = ""
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def handle_mark_review(topic_id: int) -> None:
+    """Mark the topic as reviewed (simple flow).
+
+    Uses the existing `record_review` logic with an "easy" outcome
+    so review_count and confidence are updated and persisted.
+    """
+    try:
+        record_review(topic_id, "easy")
+        st.session_state.sidebar_message = "Review saved."
+    except Exception:
+        st.session_state.sidebar_error = "Failed to record review."
+    # Clear the currently shown random topic so user can generate a new one
+    st.session_state.random_topic_id = None
 
 
 def render_sidebar() -> None:
-    st.sidebar.title("Manage Topics")
-    st.sidebar.markdown("### Add Subject / Topic")
+    st.sidebar.title("Study Helper")
+    st.sidebar.markdown("### Navigation")
+    st.sidebar.radio("Choose a page", ["Home", "Topic Management"], key="current_page")
 
-    subject_name = st.sidebar.text_input("Subject name", key="sidebar_subject")
-    topic_name = st.sidebar.text_input("Topic name", key="sidebar_topic")
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Add Topic")
+    st.sidebar.text_input("Topic name", key="sidebar_topic")
+    st.sidebar.button("Add Topic", on_click=handle_add_topic)
 
-    if st.sidebar.button("Add Topic"):
-        subject_name = sanitize_text(subject_name)
-        topic_name = sanitize_text(topic_name)
-        if not subject_name or not topic_name:
-            st.sidebar.error("Subject and topic cannot be empty.")
-        else:
-            try:
-                create_topic(subject_name, topic_name)
-                st.sidebar.success("Topic added successfully.")
-                st.experimental_rerun()
-            except sqlite3.IntegrityError:
-                st.sidebar.error("That subject/topic already exists.")
+    if st.session_state.sidebar_error:
+        st.sidebar.error(st.session_state.sidebar_error)
+    elif st.session_state.sidebar_message:
+        st.sidebar.success(st.session_state.sidebar_message)
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Import / Export")
+    st.sidebar.file_uploader("Upload JSON backup", type=["json"], key="upload_json_file")
+    st.sidebar.button("Import JSON", on_click=handle_import_json)
 
-    uploaded_file = st.sidebar.file_uploader("Upload JSON backup", type=["json"])
-    if st.sidebar.button("Import JSON"):
-        if uploaded_file is None:
-            st.sidebar.warning("Choose a JSON file first.")
-        else:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_file:
-                temp_file.write(uploaded_file.getvalue())
-                temp_path = Path(temp_file.name)
-
-            try:
-                inserted, skipped = import_json(str(temp_path))
-                st.sidebar.success(f"Imported {inserted} topics. Skipped {skipped} duplicates.")
-                st.experimental_rerun()
-            except ValueError as exc:
-                st.sidebar.error(f"Invalid JSON format: {exc}")
-            finally:
-                if temp_path.exists():
-                    temp_path.unlink()
+    if st.session_state.sidebar_error:
+        st.sidebar.error(st.session_state.sidebar_error)
+    elif st.session_state.sidebar_message:
+        st.sidebar.success(st.session_state.sidebar_message)
 
     backup_json = export_backup()
     st.sidebar.download_button(
@@ -107,13 +205,12 @@ def render_topic_management(topics: list[dict[str, Any]]) -> None:
     st.subheader("Topic Management")
 
     if not topics:
-        st.info("No topics yet. Use the sidebar to add your first subject and topic.")
+        st.info("No topics yet. Use the sidebar to add your first topic.")
         return
 
     table_data = pd.DataFrame(topics)
     table_data = table_data.rename(
         columns={
-            "subject": "Subject",
             "topic": "Topic",
             "review_count": "Reviews",
             "confidence": "Confidence",
@@ -121,29 +218,20 @@ def render_topic_management(topics: list[dict[str, Any]]) -> None:
         }
     )
     table_data["Last reviewed"] = table_data["Last reviewed"].fillna("Never")
-    st.dataframe(table_data[["Subject", "Topic", "Reviews", "Confidence", "Last reviewed"]], use_container_width=True)
+    st.dataframe(table_data[["Topic", "Reviews", "Confidence", "Last reviewed"]], use_container_width=True)
 
     st.markdown("---")
     st.write("Use the controls below to edit or delete a topic.")
 
     for topic in topics:
-        columns = st.columns([2, 4, 1, 1, 1, 1])
-        columns[0].write(topic["subject"])
-        columns[1].write(topic["topic"])
-        columns[2].write(topic["review_count"])
-        columns[3].write(topic["confidence"])
-        columns[4].write(topic["last_reviewed"] or "Never")
+        cols = st.columns([8, 1, 1])
+        cols[0].write(topic["topic"])
 
-        if columns[5].button("Edit", key=f"edit_{topic['id']}"):
+        if cols[1].button("Edit", key=f"edit_{topic['id']}"):
             st.session_state.editing_topic_id = topic["id"]
 
         if st.session_state.editing_topic_id == topic["id"]:
             with st.expander("Edit topic", expanded=True):
-                edited_subject = st.text_input(
-                    "Subject",
-                    value=topic["subject"],
-                    key=f"edit_subject_{topic['id']}",
-                )
                 edited_topic = st.text_input(
                     "Topic",
                     value=topic["topic"],
@@ -154,28 +242,24 @@ def render_topic_management(topics: list[dict[str, Any]]) -> None:
 
                 if cancel_button:
                     st.session_state.editing_topic_id = None
-                    st.experimental_rerun()
 
                 if save_button:
-                    edited_subject = sanitize_text(edited_subject)
                     edited_topic = sanitize_text(edited_topic)
-                    if not edited_subject or not edited_topic:
-                        st.error("Subject and topic cannot be empty.")
+                    if not edited_topic:
+                        st.error("Topic cannot be empty.")
                     else:
                         try:
-                            update_topic(topic["id"], edited_subject, edited_topic)
+                            update_topic(topic["id"], topic.get("subject", "General"), edited_topic)
                             st.success("Topic updated successfully.")
                             st.session_state.editing_topic_id = None
-                            st.experimental_rerun()
                         except sqlite3.IntegrityError:
-                            st.error("A topic with that subject and topic already exists.")
+                            st.error("A topic with that name already exists.")
 
-        if columns[5].button("Delete", key=f"delete_{topic['id']}"):
+        if cols[2].button("Delete", key=f"delete_{topic['id']}"):
             delete_topic(topic["id"])
             st.success("Topic deleted.")
             if st.session_state.editing_topic_id == topic["id"]:
                 st.session_state.editing_topic_id = None
-            st.experimental_rerun()
 
 
 def render_random_revision() -> None:
@@ -187,7 +271,6 @@ def render_random_revision() -> None:
             st.warning("Add a topic first to generate a revision item.")
         else:
             st.session_state.random_topic_id = random_topic["id"]
-            st.experimental_rerun()
 
     if st.session_state.random_topic_id is None:
         st.info("Generate a random topic to begin revision.")
@@ -199,25 +282,19 @@ def render_random_revision() -> None:
         st.session_state.random_topic_id = None
         return
 
-    st.markdown(f"**Subject:** {topic['subject']}  \n**Topic:** {topic['topic']}")
-    st.write(f"Reviews: {topic['review_count']} — Confidence: {topic['confidence']}")
-    st.write(f"Last reviewed: {topic['last_reviewed'] or 'Never'}")
+    # Prominent, colorful topic display
+    card_html = f"""
+    <div style="background: linear-gradient(90deg,#071021,#0b1220); padding:36px; border-radius:14px; text-align:center;">
+      <div style="font-size:36px; color:#f0abfc; font-weight:800;">{topic['topic']}</div>
+      <div style="margin-top:10px; color:#c7d2fe;">Reviews: {topic['review_count']} &nbsp; • &nbsp; Confidence: {topic['confidence']}</div>
+      <div style="margin-top:6px; color:#94a3b8; font-size:13px;">Last reviewed: {topic['last_reviewed'] or 'Never'}</div>
+    </div>
+    """
+    st.markdown(card_html, unsafe_allow_html=True)
 
-    columns = st.columns(3)
-    if columns[0].button("Easy"):
-        record_review(topic["id"], "easy")
-        st.success("Review saved: easy.")
-        st.experimental_rerun()
-
-    if columns[1].button("Medium"):
-        record_review(topic["id"], "medium")
-        st.success("Review saved: medium.")
-        st.experimental_rerun()
-
-    if columns[2].button("Hard"):
-        record_review(topic["id"], "hard")
-        st.success("Review saved: hard.")
-        st.experimental_rerun()
+    # Single unified action to mark the topic as reviewed
+    if st.button("Mark Reviewed", on_click=handle_mark_review, args=(topic["id"],)):
+        pass
 
 
 def fetch_random_topic() -> dict[str, Any] | None:
@@ -226,9 +303,7 @@ def fetch_random_topic() -> dict[str, Any] | None:
         return None
 
     weights = [max(1, 5 - topic["confidence"]) for topic in topics]
-    candidates = pd.DataFrame(topics)
-    selected = candidates.sample(weights=weights, n=1, random_state=None).iloc[0]
-    return selected.to_dict()
+    return random.choices(topics, weights=weights, k=1)[0]
 
 
 def render_progress_dashboard(topics: list[dict[str, Any]]) -> None:
@@ -238,67 +313,53 @@ def render_progress_dashboard(topics: list[dict[str, Any]]) -> None:
         st.info("Add topics to see progress charts and completion metrics.")
         return
 
-    df = pd.DataFrame(topics)
-    df["completed"] = df["review_count"] > 0
-    summary = (
-        df.groupby("subject", sort=False)
-        .agg(
-            total_topics=("id", "count"),
-            completed_topics=("completed", "sum"),
-        )
-        .reset_index()
-    )
-    summary["completion_pct"] = (summary["completed_topics"] / summary["total_topics"] * 100).round(1)
-    summary = summary.sort_values(by="completion_pct", ascending=False)
+    total_topics = len(topics)
+    completed = sum(1 for topic in topics if topic["review_count"] > 0)
+    remaining = total_topics - completed
+    completion_pct = round((completed / total_topics) * 100, 1) if total_topics else 0.0
 
-    chart, table = st.columns([1, 1])
-    with chart:
+    chart_col, info_col = st.columns([2, 1])
+    with chart_col:
         fig = px.pie(
-            summary,
-            names="subject",
-            values="completed_topics",
-            hole=0.45,
-            title="Completed Topics by Subject",
-            labels={"subject": "Subject", "completed_topics": "Completed"},
+            names=["Completed", "Remaining"],
+            values=[completed, remaining],
+            hole=0.5,
+            title="Completed Topics",
+            color_discrete_map={"Completed": "#10b981", "Remaining": "#93c5fd"},
         )
         fig.update_traces(textposition="inside", textinfo="percent+label")
         st.plotly_chart(fig, use_container_width=True)
 
-    with table:
-        display_table = summary.rename(
-            columns={
-                "subject": "Subject",
-                "total_topics": "Total Topics",
-                "completed_topics": "Completed Topics",
-                "completion_pct": "Completion %",
-            }
-        )
-        st.dataframe(display_table, use_container_width=True)
+    with info_col:
+        st.metric("Completion rate", f"{completion_pct}%")
+        st.write(f"**Completed:** {completed}")
+        st.write(f"**Remaining:** {remaining}")
+        st.progress(completed / total_topics)
 
 
 def main() -> None:
     st.set_page_config(page_title="Study Helper", layout="wide")
     initialize_db()
     ensure_session_state()
+    render_styles()
 
     st.title("📚 Study Helper")
     st.markdown(
-        "A lightweight revision assistant for medical oral exams. Add topics, review them repeatedly, and track progress visually."
+        "A clean, topic-focused study helper for oral exam revision. Add topics, review them randomly, and track your progress visually."
     )
 
     render_sidebar()
 
     topics = get_all_topics()
+    page = st.session_state.current_page
 
-    render_statistics(topics)
-
-    with st.expander("Topic Management", expanded=True):
+    if page == "Topic Management":
         render_topic_management(topics)
-
-    with st.expander("Random Revision", expanded=True):
+    else:
+        render_statistics(topics)
+        st.markdown("---")
         render_random_revision()
-
-    with st.expander("Progress Dashboard", expanded=True):
+        st.markdown("---")
         render_progress_dashboard(topics)
 
 
