@@ -86,6 +86,8 @@ def ensure_session_state() -> None:
         st.session_state.editing_topic_id = None
     if "random_topic_id" not in st.session_state:
         st.session_state.random_topic_id = None
+    if "selected_topic_id" not in st.session_state:
+        st.session_state.selected_topic_id = None
     if "sidebar_topic" not in st.session_state:
         st.session_state.sidebar_topic = ""
     if "sidebar_message" not in st.session_state:
@@ -262,9 +264,25 @@ def render_topic_management(topics: list[dict[str, Any]]) -> None:
                 st.session_state.editing_topic_id = None
 
 
-def render_random_revision() -> None:
+def render_random_revision(topics: list[dict[str, Any]]) -> None:
     st.subheader("Random Revision")
+    st.markdown("Choose a random topic or pick one manually to review.")
 
+    if topics:
+        topic_options = {topic["id"]: topic["topic"] for topic in topics}
+        selected_topic_id = st.selectbox(
+            "Choose a topic to review",
+            options=list(topic_options.keys()),
+            format_func=lambda topic_id: topic_options[topic_id],
+            key="selected_topic_id",
+        )
+
+        if st.button("Review selected topic", on_click=handle_mark_review, args=(selected_topic_id,)):
+            pass
+    else:
+        selected_topic_id = None
+
+    st.markdown("---")
     if st.button("Generate Random Topic"):
         random_topic = fetch_random_topic()
         if random_topic is None:
@@ -272,14 +290,19 @@ def render_random_revision() -> None:
         else:
             st.session_state.random_topic_id = random_topic["id"]
 
-    if st.session_state.random_topic_id is None:
-        st.info("Generate a random topic to begin revision.")
+    if selected_topic_id is None and st.session_state.random_topic_id is None:
+        st.info("Generate a random topic or select one to begin revision.")
         return
 
-    topic = fetch_topic(st.session_state.random_topic_id)
+    if selected_topic_id is not None:
+        topic = fetch_topic(selected_topic_id)
+    else:
+        topic = fetch_topic(st.session_state.random_topic_id)
+
     if topic is None:
         st.warning("The selected topic is no longer available.")
         st.session_state.random_topic_id = None
+        st.session_state.selected_topic_id = None
         return
 
     # Prominent, colorful topic display
@@ -292,7 +315,6 @@ def render_random_revision() -> None:
     """
     st.markdown(card_html, unsafe_allow_html=True)
 
-    # Single unified action to mark the topic as reviewed
     if st.button("Mark Reviewed", on_click=handle_mark_review, args=(topic["id"],)):
         pass
 
@@ -358,7 +380,7 @@ def main() -> None:
     else:
         render_statistics(topics)
         st.markdown("---")
-        render_random_revision()
+        render_random_revision(topics)
         st.markdown("---")
         render_progress_dashboard(topics)
 
